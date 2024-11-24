@@ -5,9 +5,8 @@ import torch.nn as nn
 import tenseal as ts
 import time
 import logging as log
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, recall_score, roc_auc_score, precision_score
 import numpy as np
-
 
 # Step 1: Define LeNet-1 Model
 class LeNet1(nn.Module):
@@ -28,7 +27,7 @@ class LeNet1(nn.Module):
         x = self.fc1(x)
         return x
 
-# Step 2: Train the model on simulated encrypted data
+# Step 2: Simulate Encryption Effects
 def quantize(tensor, scale=1000):
     """
     Simulate encryption effects by scaling and rounding tensor values.
@@ -44,25 +43,27 @@ def add_noise(tensor, noise_level=0.01):
 
 # Training the model
 def train_model(model, train_loader, epochs, optimizer, criterion):
+    start_train_time = time.time()
     for epoch in range(epochs):
-        model.train()  # Set model to training mode
+        model.train()
         running_loss = 0.0
 
         for images, labels in train_loader:
-            # Simulate encryption effects
-            images = quantize(images)  # Simulate encryption effects
-            images = add_noise(images)  # Simulate encryption noise
+            images = quantize(images)
+            images = add_noise(images)
 
-            optimizer.zero_grad()            # Clear previous gradients
-            outputs = model(images)          # Forward pass
-            loss = criterion(outputs, labels)  # Compute loss
-            loss.backward()                  # Backward pass
-            optimizer.step()                 # Update weights
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
-            running_loss += loss.item()      # Track loss
+            running_loss += loss.item()
 
-        # Print loss after every epoch
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}")
+    end_train_time = time.time()
+    print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
+    return start_train_time, end_train_time
 
 # Step 3: Initialize Homomorphic Encryption Context
 def initialize_bfv():
@@ -81,79 +82,85 @@ def decrypt_tensor(context, encrypted_tensor, shape):
 
 # Step 6: Evaluate the Model
 def evaluate_model(model, test_loader, context):
+    start_eval_time = time.time()
     all_preds = []
     all_labels = []
+    all_probs = []
     model.eval()
 
-    with torch.no_grad():  # Disable gradient computation for evaluation
+    with torch.no_grad():
         for images, labels in test_loader:
-            # Encrypt each image in the batch
             encrypted_images = [encrypt_tensor(context, img) for img in images]
 
             for encrypted_img, label in zip(encrypted_images, labels):
-                # Decrypt the encrypted image for inference
                 decrypted_img = decrypt_tensor(context, encrypted_img, (1, 28, 28))
-                decrypted_img = decrypted_img.unsqueeze(0)  # Add batch dimension
+                decrypted_img = decrypted_img.unsqueeze(0)
 
-                # Forward pass through the model
                 output = model(decrypted_img)
-                pred = torch.argmax(output, dim=1)
+                probs = torch.softmax(output, dim=1)
+                pred = torch.argmax(probs, dim=1)
 
-                # Append predictions and labels
                 all_preds.append(pred.item())
                 all_labels.append(label.item())
+                all_probs.append(probs.squeeze(0).cpu().numpy())
 
     # Convert predictions and labels to numpy arrays
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
+    all_probs = np.array(all_probs)
     accuracy = (all_preds == all_labels).mean()
+
+    # Calculate additional metrics
+    recall = recall_score(all_labels, all_preds, average="weighted")
+    f1 = f1_score(all_labels, all_preds, average="weighted")
+    precision = precision_score(all_labels, all_preds, average="weighted")
+    auroc = roc_auc_score(all_labels, all_probs, multi_class="ovr")
 
     # Generate classification report and confusion matrix
     print("\nClassification Report:")
     print(classification_report(all_labels, all_preds))
 
-        # Calculate and print the confusion matrix
     print("\nConfusion Matrix:")
     print(confusion_matrix(all_labels, all_preds))
 
     print(f"\nAccuracy: {accuracy:.2%}")
-    return accuracy
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"AUROC: {auroc:.4f}")
+
+    end_eval_time = time.time()
+    return start_eval_time, end_eval_time
 
 # Step 7: Main Function
 def main():
-    # Load MNIST dataset
+    overall_start_time = time.time()
+
     transform = transforms.ToTensor()
     train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     test_set = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
 
-    # Define data loaders
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=32, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False)
 
-    # Initialize model
     model = LeNet1()
-    
-    # Define optimizer and loss function
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    epochs = 20  # Number of training epochs
-
-    # Train the model
+    epochs = 20
     print("Starting training...")
-    train_model(model, train_loader, epochs, optimizer, criterion)
+    start_train_time, end_train_time = train_model(model, train_loader, epochs, optimizer, criterion)
 
-    # Initialize homomorphic encryption context
     context = initialize_bfv()
 
-    # Evaluate the model and print metrics
     print("\nEvaluating the model...")
-    starting_time = time.time()
-    evaluate_model(model, test_loader, context)
-    total_time = time.time() - starting_time
+    start_eval_time, end_eval_time = evaluate_model(model, test_loader, context)
 
-    # Log evaluation time
-    log.info(f"Evaluation Time: {total_time:.2f} seconds")
+    total_time = time.time() - overall_start_time
+    print("\nEnd-to-End Time Measurements:")
+    print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
+    print(f"Evaluation Time: {end_eval_time - start_eval_time:.2f} seconds")
+    print(f"Total Time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()

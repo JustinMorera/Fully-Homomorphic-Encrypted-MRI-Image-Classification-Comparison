@@ -2,152 +2,125 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
-import tenseal as ts
 import time
 import logging as log
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, f1_score, recall_score, precision_score
+import numpy as np
 
 # Step 1: Define LeNet-1 Model
 class LeNet1(nn.Module):
     def __init__(self):
         super(LeNet1, self).__init__()
-        self.conv1 = nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2)  # Increase from 4 to 8
+        self.conv1 = nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2)
         self.avgpool1 = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(8, 32, kernel_size=5, stride=1, padding=0)  # Increase from 12 to 32
+        self.conv2 = nn.Conv2d(8, 32, kernel_size=5, stride=1, padding=0)
         self.avgpool2 = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.5)  # Dropout for regularization
-        self.fc1 = nn.Linear(32 * 5 * 5, 10)  # Update fc1 accordingly
+        self.dropout = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(32 * 5 * 5, 10)
 
     def forward(self, x):
         x = self.avgpool1(torch.relu(self.conv1(x)))
         x = self.avgpool2(torch.relu(self.conv2(x)))
-        x = x.view(x.size(0), -1)  # Flatten
-        x = self.dropout(x)  # Apply dropout
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
         x = self.fc1(x)
         return x
 
-# Step 2: Train the model
-# def quantize(tensor, scale=1000):
-#     """
-#     Simulate encryption effects by scaling and rounding tensor values.
-#     """
-#     return torch.round(tensor * scale) / scale
-
-# def add_noise(tensor, noise_level=0.01):
-#     """
-#     Add small random noise to simulate precision loss in encryption.
-#     """
-#     noise = torch.randn_like(tensor) * noise_level
-#     return tensor + noise
-
-# Training the model
+# Step 2: Training function
 def train_model(model, train_loader, epochs, optimizer, criterion):
     for epoch in range(epochs):
-        model.train()  # Set model to training mode
+        model.train()
         running_loss = 0.0
-
         for images, labels in train_loader:
-            # Simulate encryption effects
-            # images = quantize(images)  # Simulate encryption effects
-            # images = add_noise(images)  # Simulate encryption noise
-
-            optimizer.zero_grad()            # Clear previous gradients
-            outputs = model(images)          # Forward pass
-            loss = criterion(outputs, labels)  # Compute loss
-            loss.backward()                  # Backward pass
-            optimizer.step()                 # Update weights
-
-            running_loss += loss.item()      # Track loss
-
-        # Print loss after every epoch
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}")
 
-# # Step 3: No Homomorphic Encryption Context
-# def initialize_bfv():
-#     context = ts.context(ts.SCHEME_TYPE.BFV, poly_modulus_degree=4096, plain_modulus=786433)
-#     context.generate_galois_keys()
-#     context.generate_relin_keys()
-#     return context
+# Step 3: Noise addition for robustness testing
+def add_noise(images, noise_level=0.01):
+    noise = torch.randn_like(images) * noise_level
+    return images + noise
 
-# # Step 4: Encrypt Data
-# def encrypt_tensor(context, tensor):
-#     return ts.bfv_vector(context, tensor.flatten().tolist())
-
-# # Step 5: Decrypt Data
-# def decrypt_tensor(context, encrypted_tensor, shape):
-#     return torch.tensor(encrypted_tensor.decrypt(), dtype=torch.float).reshape(shape)
-
-# Step 6: Evaluate the Model
+# Step 4: Evaluate the Model
 def evaluate_model(model, test_loader):
     correct = 0
     total = 0
     all_labels = []
     all_preds = []
+    all_probs = []
+
     model.eval()
-
-    with torch.no_grad():  # Disable gradient computation for evaluation
+    with torch.no_grad():
         for images, labels in test_loader:
-            # Forward pass through the model
+            # Optionally add noise for robustness evaluation
+            images = add_noise(images, noise_level=0.01)
             output = model(images)
-            pred = torch.argmax(output, dim=1)
-            
-            # Collect predictions and labels
+            probs = torch.softmax(output, dim=1)
+            pred = torch.argmax(probs, dim=1)
             all_preds.extend(pred.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-
-            # Compare with true label
             correct += (pred == labels).sum().item()
             total += labels.size(0)
 
-    # Calculate accuracy
     accuracy = correct / total
+    f1 = f1_score(all_labels, all_preds, average="weighted")
+    recall = recall_score(all_labels, all_preds, average="weighted")
+    auroc = roc_auc_score(all_labels, np.array(all_probs), multi_class="ovr")
 
-    # Generate classification report
+    # Generate classification report and confusion matrix
     report = classification_report(all_labels, all_preds, digits=4)
-    print("Classification Report:")
-    print(report)
-
-    # Generate confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
+
+    print("\nClassification Report:")
+    print(report)
     print("Confusion Matrix:")
     print(cm)
-
     print(f"Accuracy: {accuracy:.2%}")
-    return accuracy, report, cm
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"AUROC: {auroc:.4f}")
 
-# Step 7: Main Function
+    return accuracy, recall, f1, auroc, report, cm
+
+# Step 5: Main Function
 def main():
     # Load MNIST dataset
     transform = transforms.ToTensor()
     train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     test_set = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
 
-    # Define data loaders
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=32, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False)
 
     # Initialize model
     model = LeNet1()
-    
-    # Define optimizer and loss function
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    epochs = 20 # Number of training epochs
+    epochs = 10
 
     # Train the model
     print("Starting training...")
+    start_train_time = time.time()
     train_model(model, train_loader, epochs, optimizer, criterion)
-
-    # No homomorphic encryption context
-    # context = initialize_bfv()
+    end_train_time = time.time()
 
     # Evaluate model
-    starting_time = time.time()
-    accuracy = evaluate_model(model, test_loader)
-    total_time = time.time() - starting_time
-    log.info(f"Accuracy: {accuracy}")
-    log.info(f"Time: {total_time}")
+    print("\nEvaluating model...")
+    start_eval_time = time.time()
+    accuracy, recall, f1, auroc, report, cm = evaluate_model(model, test_loader)
+    end_eval_time = time.time()
+
+    total_time = end_eval_time - start_train_time
+
+    print("\nEnd-to-End Time Measurements:")
+    print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
+    print(f"Evaluation Time: {end_eval_time - start_eval_time:.2f} seconds")
+    print(f"Total Time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
