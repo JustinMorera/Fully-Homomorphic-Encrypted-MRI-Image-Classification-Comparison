@@ -8,6 +8,8 @@ import tenseal as ts
 import time
 import logging as log
 import os
+from sklearn.metrics import classification_report, confusion_matrix
+import numpy as np
 
 # Set up Kaggle credentials (if not already done)
 os.environ['KAGGLE_CONFIG_DIR'] = os.getcwd()
@@ -72,25 +74,25 @@ def train_model(model, train_loader, epochs, optimizer, criterion):
         # Print loss after every epoch
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}")
 
-# # Step 3: Initialize Homomorphic Encryption Context
+# Step 3: Initialize Homomorphic Encryption Context
 def initialize_bfv():
     context = ts.context(ts.SCHEME_TYPE.BFV, poly_modulus_degree=4096, plain_modulus=786433)
     context.generate_galois_keys()
     context.generate_relin_keys()
     return context
 
-# # Step 4: Encrypt Data
+# Step 4: Encrypt Data
 def encrypt_tensor(context, tensor):
     return ts.bfv_vector(context, tensor.flatten().tolist())
 
-# # Step 5: Decrypt Data
+# Step 5: Decrypt Data
 def decrypt_tensor(context, encrypted_tensor, shape):
     return torch.tensor(encrypted_tensor.decrypt(), dtype=torch.float).reshape(shape)
 
 # Step 6: Evaluate the Model
 def evaluate_model(model, test_loader, context):
-    correct = 0
-    total = 0
+    all_preds = []
+    all_labels = []
     model.eval()
 
     with torch.no_grad():  # Disable gradient computation for evaluation
@@ -106,43 +108,56 @@ def evaluate_model(model, test_loader, context):
                 # Forward pass through the model
                 output = model(decrypted_img)
                 pred = torch.argmax(output, dim=1)
-                
-                # Compare with true label
-                correct += (pred == labels).sum().item()
-                total += labels.size(0)
 
-    accuracy = correct / total
-    print(f"Accuracy: {accuracy:.2%}")
+                # Append predictions and labels for metrics
+                all_preds.append(pred.item())
+                all_labels.append(label.item())
+
+    # Convert predictions and labels to numpy arrays
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    accuracy = np.mean(all_preds == all_labels)
+    # Generate classification report and confusion matrix
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_preds, target_names=["No Tumor", "Tumor"]))
+
+    # Calculate and print the confusion matrix
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(all_labels, all_preds))
+
+    
+    print(f"\nAccuracy: {accuracy:.2%}")
     return accuracy
 
 # Step 7: Main Function
 def main():
-    # Load MNIST dataset
     # Define transforms (resize images to 28x28 and normalize)
     transform = transforms.Compose([
-    transforms.Resize((28, 28)),  # Resize to 28x28 (LeNet-1 input size)
-    transforms.ToTensor(),        # Convert to PyTorch tensor
-    transforms.Normalize((0.5,), (0.5,))  # Normalize to [-1, 1]
-])
+        transforms.Resize((28, 28)),  # Resize to 28x28 (LeNet-1 input size)
+        transforms.ToTensor(),        # Convert to PyTorch tensor
+        transforms.Normalize((0.5,), (0.5,))  # Normalize to [-1, 1]
+    ])
+
     # Load the dataset
     dataset = datasets.ImageFolder(root="./brain_tumor_dataset", transform=transform)
+    
     # Split into training and testing sets (80/20 split)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     train_set, test_set = random_split(dataset, [train_size, test_size])
 
     # Define data loaders
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=32, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_set, batch_size=32, shuffle=False)
 
     # Initialize model
     model = LeNet1()
-    
+
     # Define optimizer and loss function
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    epochs = 20 # Number of training epochs
+    epochs = 20  # Number of training epochs
 
     # Train the model
     print("Starting training...")
@@ -151,12 +166,14 @@ def main():
     # Initialize homomorphic encryption context
     context = initialize_bfv()
 
-    # Evaluate model
+    # Evaluate the model and print metrics
+    print("\nEvaluating the model...")
     starting_time = time.time()
-    accuracy = evaluate_model(model, test_loader, context)
+    evaluate_model(model, test_loader, context)
     total_time = time.time() - starting_time
-    log.info(f"Accuracy: {accuracy}")
-    log.info(f"Time: {total_time}")
+
+    # Log evaluation time
+    log.info(f"Evaluation Time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()

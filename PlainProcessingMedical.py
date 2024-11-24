@@ -37,20 +37,6 @@ class LeNet1(nn.Module):
         x = self.fc1(x)
         return x
 
-# Step 2: Train the model
-# def quantize(tensor, scale=1000):
-#     """
-#     Simulate encryption effects by scaling and rounding tensor values.
-#     """
-#     return torch.round(tensor * scale) / scale
-
-# def add_noise(tensor, noise_level=0.01):
-#     """
-#     Add small random noise to simulate precision loss in encryption.
-#     """
-#     noise = torch.randn_like(tensor) * noise_level
-#     return tensor + noise
-
 # Training the model
 def train_model(model, train_loader, epochs, optimizer, criterion):
     for epoch in range(epochs):
@@ -58,10 +44,6 @@ def train_model(model, train_loader, epochs, optimizer, criterion):
         running_loss = 0.0
 
         for images, labels in train_loader:
-            # Simulate encryption effects
-            # images = quantize(images)  # Simulate encryption effects
-            # images = add_noise(images)  # Simulate encryption noise
-
             optimizer.zero_grad()            # Clear previous gradients
             outputs = model(images)          # Forward pass
             loss = criterion(outputs, labels)  # Compute loss
@@ -72,21 +54,6 @@ def train_model(model, train_loader, epochs, optimizer, criterion):
 
         # Print loss after every epoch
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}")
-
-# # Step 3: No Homomorphic Encryption Context
-# def initialize_bfv():
-#     context = ts.context(ts.SCHEME_TYPE.BFV, poly_modulus_degree=4096, plain_modulus=786433)
-#     context.generate_galois_keys()
-#     context.generate_relin_keys()
-#     return context
-
-# # Step 4: Encrypt Data
-# def encrypt_tensor(context, tensor):
-#     return ts.bfv_vector(context, tensor.flatten().tolist())
-
-# # Step 5: Decrypt Data
-# def decrypt_tensor(context, encrypted_tensor, shape):
-#     return torch.tensor(encrypted_tensor.decrypt(), dtype=torch.float).reshape(shape)
 
 # Step 6: Evaluate the Model
 def evaluate_model(model, test_loader):

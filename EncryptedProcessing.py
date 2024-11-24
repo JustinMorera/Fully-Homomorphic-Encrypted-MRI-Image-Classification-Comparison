@@ -5,6 +5,9 @@ import torch.nn as nn
 import tenseal as ts
 import time
 import logging as log
+from sklearn.metrics import classification_report, confusion_matrix
+import numpy as np
+
 
 # Step 1: Define LeNet-1 Model
 class LeNet1(nn.Module):
@@ -15,7 +18,7 @@ class LeNet1(nn.Module):
         self.conv2 = nn.Conv2d(8, 32, kernel_size=5, stride=1, padding=0)  # Increase from 12 to 32
         self.avgpool2 = nn.AvgPool2d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout(0.5)  # Dropout for regularization
-        self.fc1 = nn.Linear(32 * 5 * 5, 10)  # Update fc1 accordingly
+        self.fc1 = nn.Linear(32 * 5 * 5, 10)   # 10 output classes (0-9)
 
     def forward(self, x):
         x = self.avgpool1(torch.relu(self.conv1(x)))
@@ -78,30 +81,42 @@ def decrypt_tensor(context, encrypted_tensor, shape):
 
 # Step 6: Evaluate the Model
 def evaluate_model(model, test_loader, context):
-    correct = 0
-    total = 0
+    all_preds = []
+    all_labels = []
     model.eval()
 
     with torch.no_grad():  # Disable gradient computation for evaluation
         for images, labels in test_loader:
             # Encrypt each image in the batch
             encrypted_images = [encrypt_tensor(context, img) for img in images]
-            
+
             for encrypted_img, label in zip(encrypted_images, labels):
                 # Decrypt the encrypted image for inference
                 decrypted_img = decrypt_tensor(context, encrypted_img, (1, 28, 28))
                 decrypted_img = decrypted_img.unsqueeze(0)  # Add batch dimension
-                
+
                 # Forward pass through the model
                 output = model(decrypted_img)
                 pred = torch.argmax(output, dim=1)
-                
-                # Compare with true label
-                correct += (pred == labels).sum().item()
-                total += labels.size(0)
 
-    accuracy = correct / total
-    print(f"Accuracy: {accuracy:.2%}")
+                # Append predictions and labels
+                all_preds.append(pred.item())
+                all_labels.append(label.item())
+
+    # Convert predictions and labels to numpy arrays
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    accuracy = (all_preds == all_labels).mean()
+
+    # Generate classification report and confusion matrix
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_preds))
+
+        # Calculate and print the confusion matrix
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(all_labels, all_preds))
+
+    print(f"\nAccuracy: {accuracy:.2%}")
     return accuracy
 
 # Step 7: Main Function
@@ -122,7 +137,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    epochs = 20 # Number of training epochs
+    epochs = 20  # Number of training epochs
 
     # Train the model
     print("Starting training...")
@@ -131,12 +146,14 @@ def main():
     # Initialize homomorphic encryption context
     context = initialize_bfv()
 
-    # Evaluate model
+    # Evaluate the model and print metrics
+    print("\nEvaluating the model...")
     starting_time = time.time()
-    accuracy = evaluate_model(model, test_loader, context)
+    evaluate_model(model, test_loader, context)
     total_time = time.time() - starting_time
-    log.info(f"Accuracy: {accuracy}")
-    log.info(f"Time: {total_time}")
+
+    # Log evaluation time
+    log.info(f"Evaluation Time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()

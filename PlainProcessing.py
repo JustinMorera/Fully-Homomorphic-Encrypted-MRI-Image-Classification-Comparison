@@ -5,6 +5,7 @@ import torch.nn as nn
 import tenseal as ts
 import time
 import logging as log
+from sklearn.metrics import classification_report, confusion_matrix
 
 # Step 1: Define LeNet-1 Model
 class LeNet1(nn.Module):
@@ -80,21 +81,39 @@ def train_model(model, train_loader, epochs, optimizer, criterion):
 def evaluate_model(model, test_loader):
     correct = 0
     total = 0
+    all_labels = []
+    all_preds = []
     model.eval()
 
     with torch.no_grad():  # Disable gradient computation for evaluation
-        for images, labels in test_loader:                        
+        for images, labels in test_loader:
             # Forward pass through the model
             output = model(images)
             pred = torch.argmax(output, dim=1)
             
+            # Collect predictions and labels
+            all_preds.extend(pred.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
             # Compare with true label
             correct += (pred == labels).sum().item()
             total += labels.size(0)
 
+    # Calculate accuracy
     accuracy = correct / total
+
+    # Generate classification report
+    report = classification_report(all_labels, all_preds, digits=4)
+    print("Classification Report:")
+    print(report)
+
+    # Generate confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+    print("Confusion Matrix:")
+    print(cm)
+
     print(f"Accuracy: {accuracy:.2%}")
-    return accuracy
+    return accuracy, report, cm
 
 # Step 7: Main Function
 def main():
