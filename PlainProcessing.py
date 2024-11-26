@@ -70,6 +70,7 @@ def evaluate_model(model, test_loader):
     accuracy = correct / total
     f1 = f1_score(all_labels, all_preds, average="weighted")
     recall = recall_score(all_labels, all_preds, average="weighted")
+    precision = precision_score(all_labels, all_preds, average="weighted")
     auroc = roc_auc_score(all_labels, np.array(all_probs), multi_class="ovr")
 
     # Generate classification report and confusion matrix
@@ -83,6 +84,7 @@ def evaluate_model(model, test_loader):
     print(f"Accuracy: {accuracy:.2%}")
     print(f"Recall: {recall:.4f}")
     print(f"F1 Score: {f1:.4f}")
+    print(f"Precision: {precision:.4f}")
     print(f"AUROC: {auroc:.4f}")
 
     return accuracy, recall, f1, auroc, report, cm
@@ -101,7 +103,7 @@ def main():
     model = LeNet1()
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    epochs = 10
+    epochs = 20
 
     # Train the model
     print("Starting training...")
