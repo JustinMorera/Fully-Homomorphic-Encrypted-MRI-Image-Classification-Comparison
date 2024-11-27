@@ -181,6 +181,8 @@ def main():
     precision = precision_score(all_labels, all_preds, average="weighted")
     auroc = roc_auc_score(all_labels, all_probs, multi_class="ovr")
 
+    end_eval_time = time.time()
+
     print("\nClassification Report:")
     print(classification_report(all_labels, all_preds))
 
@@ -193,13 +195,11 @@ def main():
     print(f"Precision: {precision:.4f}")
     print(f"AUROC: {auroc:.4f}")
 
-    end_eval_time = time.time()
-
     total_time = time.time() - overall_start_time
     print("\nEnd-to-End Time Measurements:")
-    print(f"Encryption Time: {running_encryption_time:.2f} seconds")
     print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
-    print(f"Evaluation Time: {end_eval_time - start_eval_time + running_encryption_time + running_decryption_time:.2f} seconds")
+    print(f"Encryption Time: {running_encryption_time:.2f} seconds")
+    print(f"Evaluation Time: {end_eval_time - start_eval_time - running_encryption_time - running_decryption_time:.2f} seconds")
     print(f"Decryption Time: {running_decryption_time:.2f} seconds")
     print(f"Total Time: {total_time:.2f} seconds")
 

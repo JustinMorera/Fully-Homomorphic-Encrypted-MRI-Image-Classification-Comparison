@@ -1,15 +1,14 @@
+import tenseal as ts
 import torch
+import torch.nn as nn
+import time
 import torchvision
 import torchvision.transforms as transforms
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, random_split
-import torch.nn as nn
-import tenseal as ts
-import time
-import logging as log
-import os
+from torchvision import datasets
 from sklearn.metrics import classification_report, confusion_matrix, f1_score, recall_score, precision_score, roc_auc_score
 import numpy as np
+from torch.utils.data import DataLoader, random_split
+import os
 
 # Set up Kaggle credentials (if not already done)
 os.environ['KAGGLE_CONFIG_DIR'] = os.getcwd()
@@ -19,35 +18,78 @@ os.system("kaggle datasets download -d navoneel/brain-mri-images-for-brain-tumor
 print("Dataset downloaded and unzipped.")
 
 # Step 1: Define LeNet-1 Model
-class LeNet1(nn.Module):
-    def __init__(self):
-        super(LeNet1, self).__init__()
-        self.conv1 = nn.Conv2d(3, 8, kernel_size=5, stride=1, padding=2)
-        self.avgpool1 = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(8, 32, kernel_size=5, stride=1, padding=0)
-        self.avgpool2 = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(32 * 5 * 5, 2)  # 2 output classes (yes and no)
+class LeNet(nn.Module):
+    def __init__(self, hidden=64, output=2):
+        super(LeNet, self).__init__()
+        self.conv1 = torch.nn.Conv2d(1, 4, kernel_size=7, padding=0, stride=3)
+        self.fc1 = torch.nn.Linear(256, hidden)
+        self.fc2 = torch.nn.Linear(hidden, output)
 
     def forward(self, x):
-        x = self.avgpool1(torch.relu(self.conv1(x)))
-        x = self.avgpool2(torch.relu(self.conv2(x)))
-        x = x.view(x.size(0), -1)  # Flatten
-        x = self.dropout(x)
+        x = self.conv1(x)
+        # the model uses the square activation function
+        x = x * x
+        # flattening while keeping the batch axis
+        x = x.view(-1, 256)
         x = self.fc1(x)
+        x = x * x
+        x = self.fc2(x)
         return x
 
+# Encrypted version of model
+class EncLeNet:
+    def __init__(self, torch_nn):
+        self.conv1_weight = torch_nn.conv1.weight.data.view(
+            torch_nn.conv1.out_channels, torch_nn.conv1.kernel_size[0],
+            torch_nn.conv1.kernel_size[1]
+        ).tolist()
+        self.conv1_bias = torch_nn.conv1.bias.data.tolist()
+        
+        self.fc1_weight = torch_nn.fc1.weight.T.data.tolist()
+        self.fc1_bias = torch_nn.fc1.bias.data.tolist()
+        
+        self.fc2_weight = torch_nn.fc2.weight.T.data.tolist()
+        self.fc2_bias = torch_nn.fc2.bias.data.tolist()      
+        
+    def forward(self, enc_image, num_windows):
+        # conv layer
+        enc_channels = []
+        for kernel, bias in zip(self.conv1_weight, self.conv1_bias):
+            y = enc_image.conv2d_im2col(kernel, num_windows) + bias
+            enc_channels.append(y)
+        # pack all channels into a single flattened vector
+        enc_image = ts.CKKSVector.pack_vectors(enc_channels)
+        # square activation
+        enc_image.square_()
+        # fc1 layer
+        enc_image = enc_image.mm(self.fc1_weight) + self.fc1_bias
+        # square activation
+        enc_image.square_()
+        # fc2 layer
+        enc_image = enc_image.mm(self.fc2_weight) + self.fc2_bias
+        return enc_image
+    
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+    
 # Step 2: Simulate Encryption Effects
 def quantize(tensor, scale=1000):
+    """
+    Simulate encryption effects by scaling and rounding tensor values.
+    """
     return torch.round(tensor * scale) / scale
 
 def add_noise(tensor, noise_level=0.01):
+    """
+    Add small random noise to simulate precision loss in encryption.
+    """
     noise = torch.randn_like(tensor) * noise_level
     return tensor + noise
 
 # Training the model
 def train_model(model, train_loader, epochs, optimizer, criterion):
     start_train_time = time.time()
+    model.train()
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -67,48 +109,84 @@ def train_model(model, train_loader, epochs, optimizer, criterion):
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_loader):.4f}")
     end_train_time = time.time()
     print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
-    return start_train_time, end_train_time
+    return end_train_time, start_train_time
 
-# Step 3: Initialize Homomorphic Encryption Context
-def initialize_bfv():
-    start_time = time.time()
-    context = ts.context(ts.SCHEME_TYPE.BFV, poly_modulus_degree=4096, plain_modulus=786433)
+# Main Function
+def main():
+    overall_start_time = time.time()
+
+    # Initialize BFV context
+    print("Generating encryption keys and context...")
+    bits_scale = 26
+    context = ts.context(ts.SCHEME_TYPE.CKKS, poly_modulus_degree=8192, coeff_mod_bit_sizes=[31, bits_scale, bits_scale, bits_scale, bits_scale, bits_scale, bits_scale, 31])
+    # set the scale
+    context.global_scale = pow(2, bits_scale)
+    # galois keys are required to do ciphertext rotations
     context.generate_galois_keys()
-    context.generate_relin_keys()
-    print(f"Encryption Context Initialization Time: {time.time() - start_time:.2f} seconds")
-    return context
 
-# Step 4: Encrypt Data
-def encrypt_tensor(context, tensor):
-    return ts.bfv_vector(context, tensor.flatten().tolist())
+    # Prepare medical data
+    transform = transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
 
-# Step 5: Decrypt Data
-def decrypt_tensor(context, encrypted_tensor, shape):
-    return torch.tensor(encrypted_tensor.decrypt(), dtype=torch.float).reshape(shape)
+    dataset = datasets.ImageFolder(root="./brain_tumor_dataset", transform=transform)
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    train_set, test_set = random_split(dataset, [train_size, test_size])
 
-# Step 6: Evaluate the Model
-def evaluate_model(model, test_loader, context):
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
+
+    # Initialize plaintext model
+    plaintext_model = LeNet()  # Use unencrypted layers for training
+
+    # Train the model
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(plaintext_model.parameters(), lr=0.001)
+    print("Training the model on encryption-simulated data...")
+    end_train_time, start_train_time = train_model(plaintext_model, train_loader, epochs=10, optimizer=optimizer, criterion=criterion)
+    encrypted_model = EncLeNet(plaintext_model)
+
+    # Encryption and Evaluation
+    print("Encrypting and evaluating data on the model...")
     start_eval_time = time.time()
     all_preds = []
     all_labels = []
     all_probs = []
-    model.eval()
 
-    with torch.no_grad():
-        for images, labels in test_loader:
-            encrypted_images = [encrypt_tensor(context, img) for img in images]
-            
-            for encrypted_img, label in zip(encrypted_images, labels):
-                decrypted_img = decrypt_tensor(context, encrypted_img, (3, 28, 28))
-                decrypted_img = decrypted_img.unsqueeze(0)
+    running_encryption_time = 0
+    running_decryption_time = 0
+    kernel_shape = plaintext_model.conv1.kernel_size
+    stride = plaintext_model.conv1.stride[0]
+ 
+    counter = 1
+    for image, label in test_loader:
+        # Encoding and encryption
+        encryption_start_time = time.time()
+        enc_image, num_windows = ts.im2col_encoding(
+            context, image.view(28, 28).tolist(), kernel_shape[0],
+            kernel_shape[1], stride
+        )
+        encryption_end_time = time.time()
+        running_encryption_time += encryption_end_time - encryption_start_time
+        print(f"Counter: {counter}")
+        counter += 1
+        # Encrypted inference/evaluation
+        encrypted_output = encrypted_model(enc_image, num_windows)
+        start_decrypt_time = time.time()
+        decrypted_output = encrypted_output.decrypt()
+        end_decrypt_time = time.time()
+        running_decryption_time += end_decrypt_time - start_decrypt_time
 
-                output = model(decrypted_img)
-                probs = torch.softmax(output, dim=1)
-                pred = torch.argmax(probs, dim=1)
+        probs = torch.softmax(torch.tensor(decrypted_output), dim=0)
+        pred = torch.argmax(probs, dim=0)
 
-                all_preds.append(pred.item())
-                all_labels.append(label.item())
-                all_probs.append(probs.squeeze(0).cpu().numpy())
+        all_preds.append(pred.item())
+        all_labels.append(label.item())
+        all_probs.append(probs.squeeze(0).cpu().numpy())
 
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
@@ -121,6 +199,8 @@ def evaluate_model(model, test_loader, context):
     precision = precision_score(all_labels, all_preds, average="binary")
     auroc = roc_auc_score(all_labels, all_probs[:, 1])
 
+    end_eval_time = time.time()
+    
     print("\nClassification Report:")
     print(classification_report(all_labels, all_preds, target_names=["No Tumor", "Tumor"]))
 
@@ -133,43 +213,12 @@ def evaluate_model(model, test_loader, context):
     print(f"Precision: {precision:.4f}")
     print(f"AUROC: {auroc:.4f}")
 
-    end_eval_time = time.time()
-    return start_eval_time, end_eval_time
-
-# Step 7: Main Function
-def main():
-    overall_start_time = time.time()
-
-    transform = transforms.Compose([
-        transforms.Resize((28, 28)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
-
-    dataset = datasets.ImageFolder(root="./brain_tumor_dataset", transform=transform)
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
-    train_set, test_set = random_split(dataset, [train_size, test_size])
-
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
-    test_loader = DataLoader(test_set, batch_size=32, shuffle=False)
-
-    model = LeNet1()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    print("Starting training...")
-    start_train_time, end_train_time = train_model(model, train_loader, epochs=20, optimizer=optimizer, criterion=criterion)
-
-    context = initialize_bfv()
-
-    print("\nEvaluating the model...")
-    start_eval_time, end_eval_time = evaluate_model(model, test_loader, context)
-
     total_time = time.time() - overall_start_time
     print("\nEnd-to-End Time Measurements:")
     print(f"Training Time: {end_train_time - start_train_time:.2f} seconds")
-    print(f"Evaluation Time: {end_eval_time - start_eval_time:.2f} seconds")
+    print(f"Encryption Time: {running_encryption_time:.2f} seconds")
+    print(f"Evaluation Time: {end_eval_time - start_eval_time - running_encryption_time - running_decryption_time:.2f} seconds")
+    print(f"Decryption Time: {running_decryption_time:.2f} seconds")
     print(f"Total Time: {total_time:.2f} seconds")
 
 if __name__ == "__main__":
