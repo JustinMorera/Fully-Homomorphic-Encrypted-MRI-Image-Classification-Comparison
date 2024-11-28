@@ -17,7 +17,7 @@ os.environ['KAGGLE_CONFIG_DIR'] = os.getcwd()
 os.system("kaggle datasets download -d navoneel/brain-mri-images-for-brain-tumor-detection --unzip")
 print("Dataset downloaded and unzipped.")
 
-# Step 1: Define LeNet-1 Model
+# Define LeNet-1 Model
 class LeNet(nn.Module):
     def __init__(self, hidden=64, output=2):
         super(LeNet, self).__init__()
@@ -147,7 +147,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(plaintext_model.parameters(), lr=0.001)
     print("Training the model on encryption-simulated data...")
-    end_train_time, start_train_time = train_model(plaintext_model, train_loader, epochs=10, optimizer=optimizer, criterion=criterion)
+    end_train_time, start_train_time = train_model(plaintext_model, train_loader, epochs=20, optimizer=optimizer, criterion=criterion)
     encrypted_model = EncLeNet(plaintext_model)
 
     # Encryption and Evaluation

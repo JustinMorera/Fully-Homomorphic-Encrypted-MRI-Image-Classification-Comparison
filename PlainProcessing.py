@@ -26,7 +26,7 @@ class LeNet(nn.Module):
         x = self.fc2(x)
         return x
 
-# Training function
+# Training the model
 def train_model(model, train_loader, epochs, optimizer, criterion):
     start_train_time = time.time()
     model.train()
@@ -58,10 +58,9 @@ def main():
 
     # Initialize model
     model = LeNet()
+    # Train the model
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    # Train the model
     print("Training the model...")
     end_train_time, start_train_time = train_model(model, train_loader, epochs=10, optimizer=optimizer, criterion=criterion)
 
