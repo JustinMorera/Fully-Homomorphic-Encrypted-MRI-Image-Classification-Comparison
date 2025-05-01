@@ -78,3 +78,6 @@ This script will:
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
+If you have any questions or need further assistance, please contant [Justin Morera](mailto:mustinjorera@gmail.com)
